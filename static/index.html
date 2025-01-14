@@ -23,6 +23,9 @@
 <body>
   <div id="app" class="container">
     <section class="section section-container" style="padding-bottom: 10px;">
+      <populate-button @database-populated="onDatabasePopulated" />
+    </section>
+    <section class="section section-container" style="padding-bottom: 10px;">
       <div class="box">
         <search-games title="Search Games" @search-games-db="searchGames" :search="search" />
       </div>
@@ -206,9 +209,54 @@
     `
     }
 
+    const PopulateButton = {
+      data() {
+        return {
+          isLoading: false,
+          message: ''
+        }
+      },
+      methods: {
+        async populateDatabase() {
+          this.isLoading = true;
+          this.message = 'Populating database...';
+          try {
+            const response = await axios.post('/api/games/populate');
+            this.message = `Success! Added ${response.data.count} games`;
+            // Refresh the games list
+            this.$emit('database-populated');
+          } catch (error) {
+            this.message = `Error: ${error.response?.data?.message || 'Failed to populate database'}`;
+          } finally {
+            this.isLoading = false;
+          }
+        }
+      },
+      template: `
+        <div class="box">
+          <button 
+            class="button is-primary" 
+            @click="populateDatabase" 
+            :class="{ 'is-loading': isLoading }"
+            :disabled="isLoading"
+          >
+            Populate Database
+          </button>
+          <p class="help" :class="{ 'is-danger': message.includes('Error'), 'is-success': !message.includes('Error') }">
+            {{ message }}
+          </p>
+        </div>
+      `
+    };
+
     new Vue({
       el: '#app',
-      components: { game: Game, 'add-update-game': AddUpdateGame, 'search-games': Search },
+      components: {
+        game: Game,
+        'add-update-game': AddUpdateGame,
+        'search-games': Search,
+        'populate-button': PopulateButton
+      },
       data: {
         games: [],
         search: [],
@@ -254,6 +302,11 @@
             .then((response) => {
               this.games = response.data
             })
+        },
+        async onDatabasePopulated() {
+          // Refresh the games list
+          const response = await axios.get(this.apiURL);
+          this.games = response.data;
         }
       },
       beforeMount() {

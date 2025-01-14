@@ -1,6 +1,7 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const { Op } = require('sequelize');
+const axios = require('axios');
 const db = require('./models');
 
 const app = express();
@@ -112,6 +113,96 @@ app.post('/api/games/search', async (req, res) => {
       error: 'Internal server error',
       message: 'An unexpected error occurred while processing your request',
       requestId: Date.now(),
+    });
+  }
+});
+
+/**
+ * Endpoint to populate the database with top 100 games from both app stores
+ *
+ * Implementation notes:
+ * 1. The source files (android.top100.json and ios.top100.json) contain multiple arrays of games,
+ *    but we only take the first 100 games after flattening as per requirements.
+ *
+ * 2. Data cleanup strategy:
+ *    Current implementation: We clear all existing data before inserting new games (destroy + bulkCreate)
+ *    Alternative approach: We could have used an upsert strategy using bundleId as a unique identifier:
+ *    - This would preserve existing games not in the top 100
+ *    - Would require adding a unique constraint on bundleId in the migration
+ *    - Example implementation would use bulkCreate with updateOnDuplicate option:
+ *      await db.Game.bulkCreate(allGames, {
+ *        updateOnDuplicate: ['name', 'publisherId', 'platform', 'storeId', 'appVersion', 'isPublished', 'updatedAt'],
+ *        conflictFields: ['bundleId']
+ *      });
+ *
+ * @route POST /api/games/populate
+ * @returns {Object} Status message and count of imported games
+ */
+app.post('/api/games/populate', async (req, res) => {
+  try {
+    const urls = {
+      android: 'https://interview-marketing-eng-dev.s3.eu-west-1.amazonaws.com/android.top100.json',
+      ios: 'https://interview-marketing-eng-dev.s3.eu-west-1.amazonaws.com/ios.top100.json',
+    };
+
+    const [androidResponse, iosResponse] = await Promise.all([
+      axios.get(urls.android),
+      axios.get(urls.ios),
+    ]);
+
+    // Flatten arrays and take only first 100 games for each platform
+    const androidGames = androidResponse.data
+      .flat()
+      .slice(0, 100)
+      .map((game) => ({
+        publisherId: game.publisher_id,
+        name: game.name,
+        platform: 'android',
+        storeId: game.app_id,
+        bundleId: game.bundle_id,
+        appVersion: game.version,
+        isPublished: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }));
+
+    const iosGames = iosResponse.data
+      .flat()
+      .slice(0, 100)
+      .map((game) => ({
+        publisherId: game.publisher_id ? game.publisher_id.toString() : null,
+        name: game.name,
+        platform: 'ios',
+        storeId: game.app_id ? game.app_id.toString() : null,
+        bundleId: game.bundle_id,
+        appVersion: game.version,
+        isPublished: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }));
+
+    const allGames = [...androidGames, ...iosGames];
+
+    await db.Game.destroy({ truncate: true });
+    const insertedGames = await db.Game.bulkCreate(allGames);
+
+    return res.status(200).json({
+      message: 'Database populated successfully',
+      count: insertedGames.length,
+      androidCount: androidGames.length,
+      iosCount: iosGames.length,
+    });
+  } catch (error) {
+    console.error('Population error:', {
+      message: error.message,
+      stack: error.stack,
+      timestamp: new Date().toISOString(),
+    });
+
+    return res.status(500).json({
+      error: 'Internal server error',
+      message: 'Failed to populate the database',
+      details: error.message,
     });
   }
 });
